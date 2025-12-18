@@ -1,0 +1,403 @@
+import React, { useState, useEffect, useRef } from 'react';
+import * as Tone from 'tone';
+
+export default function DrivingGame() {
+  const canvasRef = useRef(null);
+  const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(0);
+  const [gameOver, setGameOver] = useState(false);
+  const [musicStarted, setMusicStarted] = useState(false);
+  const [pokiReady, setPokiReady] = useState(false);
+  const synthsRef = useRef(null);
+  const pokiRef = useRef(null);
+  const gamePausedRef = useRef(false);
+  
+  const gameState = useRef({
+    car: { x: 180, y: 400, width: 40, height: 70 },
+    obstacles: [],
+    roadLines: [],
+    speed: 3,
+    lastObstacle: 0,
+    lastLine: 0
+  });
+
+  const obstacleTypes = [
+    { color: '#ff3333', name: 'red' },
+    { color: '#33ff33', name: 'green' },
+    { color: '#ffaa00', name: 'orange' },
+    { color: '#ff33ff', name: 'purple' },
+    { color: '#00ffff', name: 'cyan' }
+  ];
+
+  const keys = useRef({ left: false, right: false });
+  const touch = useRef({ left: false, right: false });
+
+  // Initialize Poki SDK
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://game-cdn.poki.com/scripts/v2/poki-sdk.js';
+    script.async = true;
+    script.onload = () => {
+      if (window.PokiSDK) {
+        window.PokiSDK.init().then(() => {
+          console.log('Poki SDK initialized');
+          pokiRef.current = window.PokiSDK;
+          setPokiReady(true);
+          window.PokiSDK.gameLoadingFinished();
+        }).catch(() => {
+          console.log('Poki SDK failed to initialize');
+          setPokiReady(false);
+        });
+      }
+    };
+    document.head.appendChild(script);
+
+    return () => {
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
+  }, []);
+
+  const pauseGame = () => {
+    gamePausedRef.current = true;
+    if (synthsRef.current && Tone.Transport.state === 'started') {
+      Tone.Transport.pause();
+    }
+  };
+
+  const resumeGame = () => {
+    gamePausedRef.current = false;
+    if (synthsRef.current && Tone.Transport.state === 'paused') {
+      Tone.Transport.start();
+    }
+  };
+
+  const startMusic = async () => {
+    if (musicStarted) return;
+    
+    await Tone.start();
+    setMusicStarted(true);
+
+    // Suppress Tone.js console messages
+    const originalLog = console.log;
+    console.log = function(...args) {
+      if (args[0] && typeof args[0] === 'string' && args[0].includes('Tone.js')) {
+        return;
+      }
+      originalLog.apply(console, args);
+    };
+
+    // Notify Poki that gameplay started
+    if (pokiRef.current) {
+      pokiRef.current.gameplayStart();
+    }
+
+    // Create synths for epic orchestral-style music
+    const bass = new Tone.Synth({
+      oscillator: { type: 'triangle' },
+      envelope: { attack: 0.1, decay: 0.3, sustain: 0.4, release: 0.8 }
+    }).toDestination();
+    bass.volume.value = -10;
+
+    const melody = new Tone.Synth({
+      oscillator: { type: 'sine' },
+      envelope: { attack: 0.05, decay: 0.2, sustain: 0.3, release: 0.5 }
+    }).toDestination();
+    melody.volume.value = -8;
+
+    const harmony = new Tone.PolySynth(Tone.Synth).toDestination();
+    harmony.volume.value = -15;
+
+    synthsRef.current = { bass, melody, harmony };
+
+    // Epic adventure melody pattern
+    const melodyPattern = [
+      ['D4', '8n'], ['E4', '8n'], ['F4', '8n'], ['G4', '4n'],
+      ['A4', '8n'], ['G4', '8n'], ['F4', '4n'], ['E4', '8n'],
+      ['D4', '8n'], ['C4', '8n'], ['D4', '4n'], ['F4', '4n'],
+      ['G4', '8n'], ['A4', '8n'], ['Bb4', '2n']
+    ];
+
+    // Driving bass line
+    const bassPattern = [
+      ['D2', '4n'], ['D2', '8n'], ['A2', '8n'],
+      ['D2', '4n'], ['F2', '8n'], ['G2', '8n']
+    ];
+
+    // Harmony chords
+    const chordPattern = [
+      [['D3', 'F3', 'A3'], '2n'],
+      [['C3', 'E3', 'G3'], '2n'],
+      [['Bb2', 'D3', 'F3'], '2n'],
+      [['A2', 'C3', 'E3'], '2n']
+    ];
+
+    let melodyIndex = 0;
+    let bassIndex = 0;
+    let chordIndex = 0;
+
+    // Schedule melody
+    Tone.Transport.scheduleRepeat((time) => {
+      const [note, duration] = melodyPattern[melodyIndex];
+      melody.triggerAttackRelease(note, duration, time);
+      melodyIndex = (melodyIndex + 1) % melodyPattern.length;
+    }, '8n');
+
+    // Schedule bass
+    Tone.Transport.scheduleRepeat((time) => {
+      const [note, duration] = bassPattern[bassIndex];
+      bass.triggerAttackRelease(note, duration, time);
+      bassIndex = (bassIndex + 1) % bassPattern.length;
+    }, '4n');
+
+    // Schedule harmony
+    Tone.Transport.scheduleRepeat((time) => {
+      const [notes, duration] = chordPattern[chordIndex];
+      harmony.triggerAttackRelease(notes, duration, time);
+      chordIndex = (chordIndex + 1) % chordPattern.length;
+    }, '2n');
+
+    Tone.Transport.bpm.value = 140;
+    Tone.Transport.start();
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    let animationId;
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'ArrowLeft') keys.current.left = true;
+      if (e.key === 'ArrowRight') keys.current.right = true;
+    };
+
+    const handleKeyUp = (e) => {
+      if (e.key === 'ArrowLeft') keys.current.left = false;
+      if (e.key === 'ArrowRight') keys.current.right = false;
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    // Handle visibility change for Poki
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        pauseGame();
+      } else {
+        resumeGame();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const resetGame = () => {
+      gameState.current = {
+        car: { x: 100, y: 400, width: 40, height: 70 },
+        obstacles: [],
+        roadLines: [],
+        speed: 3,
+        lastObstacle: 0,
+        lastLine: 0
+      };
+      setScore(0);
+      setGameOver(false);
+      gamePausedRef.current = false;
+
+      // Notify Poki gameplay started
+      if (pokiRef.current) {
+        pokiRef.current.gameplayStart();
+      }
+    };
+
+    const checkCollision = (car, obstacle) => {
+      return car.x < obstacle.x + obstacle.width &&
+             car.x + car.width > obstacle.x &&
+             car.y < obstacle.y + obstacle.height &&
+             car.y + car.height > obstacle.y;
+    };
+
+    const gameLoop = () => {
+      if (gameOver || gamePausedRef.current) return;
+
+      const { car, obstacles, roadLines } = gameState.current;
+
+      // Update car position
+      if ((keys.current.left || touch.current.left) && car.x > 80) car.x -= 4;
+      if ((keys.current.right || touch.current.right) && car.x < 272) car.x += 4;
+
+      // Update obstacles - constant speed
+      const constantSpeed = 5;
+      gameState.current.speed += 0.001;
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        obstacles[i].y += gameState.current.speed + constantSpeed;
+        
+        if (obstacles[i].y > 600) {
+          obstacles.splice(i, 1);
+          setScore(s => {
+            const newScore = s + 10;
+            setHighScore(prev => Math.max(prev, newScore));
+            return newScore;
+          });
+        } else if (checkCollision(car, obstacles[i])) {
+          setGameOver(true);
+
+          // Notify Poki gameplay stopped
+          if (pokiRef.current) {
+            pokiRef.current.gameplayStop();
+          }
+
+          // Show commercial break
+          if (pokiRef.current) {
+            pauseGame();
+            pokiRef.current.commercialBreak().then(() => {
+              resumeGame();
+            });
+          }
+          return;
+        }
+      }
+
+      // Add new obstacles
+      gameState.current.lastObstacle++;
+      if (gameState.current.lastObstacle > 30) {
+        const lanes = [88, 136, 184, 232, 280];
+        const lane = lanes[Math.floor(Math.random() * lanes.length)];
+        const type = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
+        obstacles.push({ x: lane, y: -100, width: 40, height: 70, type });
+        gameState.current.lastObstacle = 0;
+      }
+
+      // Update road lines
+      for (let i = roadLines.length - 1; i >= 0; i--) {
+        roadLines[i].y += gameState.current.speed + constantSpeed;
+        if (roadLines[i].y > 600) roadLines.splice(i, 1);
+      }
+
+      gameState.current.lastLine++;
+      if (gameState.current.lastLine > 20) {
+        roadLines.push({ y: -20 });
+        gameState.current.lastLine = 0;
+      }
+
+      // Draw everything
+      ctx.fillStyle = '#2d5016';
+      ctx.fillRect(0, 0, 400, 600);
+
+      ctx.fillStyle = '#404040';
+      ctx.fillRect(80, 0, 240, 600);
+
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(80, 0);
+      ctx.lineTo(80, 600);
+      ctx.moveTo(200, 0);
+      ctx.lineTo(200, 600);
+      ctx.moveTo(320, 0);
+      ctx.lineTo(320, 600);
+      ctx.stroke();
+
+      obstacles.forEach(obs => {
+        ctx.fillStyle = obs.type.color;
+        ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+        ctx.fillStyle = '#ffff00';
+        ctx.fillRect(obs.x + 5, obs.y + 10, 10, 10);
+        ctx.fillRect(obs.x + 25, obs.y + 10, 10, 10);
+      });
+
+      ctx.fillStyle = '#3366ff';
+      ctx.fillRect(car.x, car.y, car.width, car.height);
+      ctx.fillStyle = '#ffff00';
+      ctx.fillRect(car.x + 5, car.y + 50, 10, 10);
+      ctx.fillRect(car.x + 25, car.y + 50, 10, 10);
+
+      animationId = requestAnimationFrame(gameLoop);
+    };
+
+    resetGame();
+    gameLoop();
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      cancelAnimationFrame(animationId);
+    };
+  }, [gameOver]);
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 p-4">
+      {!musicStarted && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-90 z-50">
+          <button
+            onClick={startMusic}
+            className="px-8 py-4 bg-blue-500 text-white text-2xl font-bold rounded-lg hover:bg-blue-600 transition shadow-lg"
+          >
+            🎵 Start Game & Music
+          </button>
+        </div>
+      )}
+      
+      <div className="mb-4 text-center">
+        <h1 className="text-4xl font-bold text-white mb-2">Driving Game</h1>
+        <p className="text-xl text-white">Score: {score}</p>
+        <p className="text-lg text-yellow-400">High Score: {highScore}</p>
+        <p className="text-sm text-gray-400 mt-2">Use Arrow Keys to Drive</p>
+      </div>
+      
+      <div className="relative flex items-center gap-4">
+        <button
+          onTouchStart={(e) => { e.preventDefault(); touch.current.left = true; }}
+          onTouchEnd={(e) => { e.preventDefault(); touch.current.left = false; }}
+          onMouseDown={(e) => { e.preventDefault(); touch.current.left = true; }}
+          onMouseUp={(e) => { e.preventDefault(); touch.current.left = false; }}
+          onMouseLeave={() => touch.current.left = false}
+          type="button"
+          className={`w-20 h-20 rounded-full font-bold text-4xl transition flex items-center justify-center bg-blue-500 text-white active:bg-blue-700 shadow-lg select-none hover:bg-blue-600`}
+        >
+          ←
+        </button>
+
+        <canvas
+          ref={canvasRef}
+          width={400}
+          height={600}
+          className="border-4 border-gray-700 rounded"
+        />
+
+        <button
+          onTouchStart={(e) => { e.preventDefault(); touch.current.right = true; }}
+          onTouchEnd={(e) => { e.preventDefault(); touch.current.right = false; }}
+          onMouseDown={(e) => { e.preventDefault(); touch.current.right = true; }}
+          onMouseUp={(e) => { e.preventDefault(); touch.current.right = false; }}
+          onMouseLeave={() => touch.current.right = false}
+          type="button"
+          className={`w-20 h-20 rounded-full font-bold text-4xl transition flex items-center justify-center bg-blue-500 text-white active:bg-blue-700 shadow-lg select-none hover:bg-blue-600`}
+        >
+          →
+        </button>
+        
+        {gameOver && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75 rounded">
+            <div className="text-center">
+              <h2 className="text-4xl font-bold text-red-500 mb-4">Game Over!</h2>
+              <p className="text-2xl text-white mb-4">Final Score: {score}</p>
+              <button
+                onClick={() => setGameOver(false)}
+                className="px-6 py-3 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 transition"
+              >
+                Play Again
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+      
+      <div className="mt-4 text-gray-400 text-sm text-center">
+        <p>← → Steer Left and Right</p>
+      </div>
+
+    </div>
+  );
+}
